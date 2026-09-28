@@ -164,5 +164,15 @@ class Stage2Tests(unittest.TestCase):
         self.assertEqual(detail.calls, 1)  # 未重新精判
 
 
+    def test_llm_cap_zero_skips_detail(self):
+        screen, detail = FakeScreen(0.8), FakeDetail()
+        pipe = self._pipe(screen=screen, detail=detail)
+        self.store.replace_candidates([('pk1', 'similar', 'a', 'b', 0, 0.5, 'v')])
+        self.store.refresh_pairs()
+        pipe.run(llm_cap=0)
+        self.assertEqual(screen.calls, 1)   # 初筛照跑
+        self.assertEqual(detail.calls, 0)   # 0 上限 → 完全不跑精判
+
+
 if __name__ == '__main__':
     unittest.main()

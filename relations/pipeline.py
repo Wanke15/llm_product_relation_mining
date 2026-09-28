@@ -43,6 +43,25 @@ def preview_threshold(store, threshold, audit_rate, seed):
     return out
 
 
+def _collect(futs, label, total):
+    """消费 futures：打进度；Ctrl+C 时取消未开始任务并立刻退出（已完成对已落库缓存）。"""
+    done, next_mark = 0, 10
+    try:
+        for f in as_completed(futs):
+            done += 1
+            if total >= 20:
+                pct = done * 100 // total
+                if pct >= next_mark:
+                    print(f'  {label} {done}/{total} ({pct}%)', flush=True)
+                    next_mark = (pct // 10 + 1) * 10
+            yield f.result()
+    except KeyboardInterrupt:
+        for f in futs:
+            f.cancel()
+        print(f'\n  interrupted: {label} 已完成 {done}/{total}（已完成对已缓存，重跑即续跑）', flush=True)
+        raise SystemExit(130)
+
+
 class Pipeline:
     """两阶段流水线：Jev Noul 初筛 → 路由（阈值/抽查）→ LLM 精判，分层缓存 + 断点恢复。
 
@@ -137,7 +156,7 @@ class Pipeline:
 
     def run(self, limit=None, llm_cap=None, resume=None):
         pairs = sorted(self.store.distinct_pairs(), key=lambda x: x['pair_key'])
-        if limit:
+        if limit is not None:
             pairs = pairs[:limit]
         by_id = {p['spu_id']: p for p in self.store.active_products()}
         hashes = self.store.all_hashes()
@@ -152,10 +171,10 @@ class Pipeline:
         s_con = max(1, int(os.getenv('SCREEN_CONCURRENCY', '4')))
         total = len(pairs)
         print(f'  screen: {total} pairs (Jev Noul)...', flush=True)
-        done, next_mark = 0, 10
-        with ThreadPoolExecutor(max_workers=s_con) as ex:
-            for f in as_completed([ex.submit(self._screen_pair, p, by_id, hashes) for p in pairs]):
-                res = f.result()
+        ex = ThreadPoolExecutor(max_workers=s_con)
+        try:
+            futs = [ex.submit(self._screen_pair, p, by_id, hashes) for p in pairs]
+            for res in _collect(futs, 'screen', total):
                 if res == 'reused':
                     counts['screen_reused'] += 1
                 elif res == 'error':
@@ -164,12 +183,8 @@ class Pipeline:
                     counts['screen_insufficient'] += 1
                 else:
                     counts['screen_called'] += 1
-                done += 1
-                if total >= 20:
-                    pct = done * 100 // total
-                    if pct >= next_mark:
-                        print(f'  screen {done}/{total} ({pct}%)', flush=True)
-                        next_mark = (pct // 10 + 1) * 10
+        finally:
+            ex.shutdown(wait=False, cancel_futures=True)
 
         detail_pairs = []
         for p in pairs:
@@ -183,17 +198,17 @@ class Pipeline:
                 counts[route] += 1
             elif route == 'screened_out':
                 counts['screened_out'] += 1
-        if llm_cap:
+        if llm_cap is not None:
             detail_pairs = detail_pairs[:llm_cap]
 
         d_con = max(1, int(os.getenv('DETAIL_CONCURRENCY', '4')))
         total_d = len(detail_pairs)
         print(f'  detail: {total_d} pairs (LLM)...', flush=True)
-        done_d, next_mark_d = 0, 10
-        with ThreadPoolExecutor(max_workers=d_con) as ex:
-            for f in as_completed([ex.submit(self._detail_pair, p, route, by_id, hashes)
-                                   for p, route in detail_pairs]):
-                res = f.result()
+        ex = ThreadPoolExecutor(max_workers=d_con)
+        try:
+            futs = [ex.submit(self._detail_pair, p, route, by_id, hashes)
+                    for p, route in detail_pairs]
+            for res in _collect(futs, 'detail', total_d):
                 if res == 'reused':
                     counts['detail_reused'] += 1
                 elif res == 'ok':
@@ -202,12 +217,8 @@ class Pipeline:
                 else:
                     counts['detail_error'] += 1
                     counts['detail_called'] += 1
-                done_d += 1
-                if total_d >= 20:
-                    pct = done_d * 100 // total_d
-                    if pct >= next_mark_d:
-                        print(f'  detail {done_d}/{total_d} ({pct}%)', flush=True)
-                        next_mark_d = (pct // 10 + 1) * 10
+        finally:
+            ex.shutdown(wait=False, cancel_futures=True)
 
         self.store.set_run_status(run_id, 'complete', counts)
         return counts, run_id
