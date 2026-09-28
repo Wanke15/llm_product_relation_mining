@@ -1,0 +1,25 @@
+# 密钥与环境（绝不提交）
+.env
+.env.bak
+.env.new
+.env.local
+
+# 数据（源数据 + 派生库/索引，敏感或可再生，不提交）
+data/prod_df.csv
+data/relations.db*
+data/index/
+
+# 历史运行结果
+runs/
+
+# 演示产物
+demo/
+
+# Python
+.venv/
+.uv-cache/
+__pycache__/
+*.pyc
+
+# IDE
+.idea/

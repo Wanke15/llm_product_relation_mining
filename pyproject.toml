@@ -1,0 +1,12 @@
+[project]
+name = "product-relations"
+version = "0.1.0"
+description = "SPU relation mining and local review workbench"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=2.4.6",
+]
+
+[tool.uv]
+cache-dir = ".uv-cache"
+
