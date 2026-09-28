@@ -343,18 +343,16 @@ def serve(args):
                                                                       int(os.getenv('RANDOM_SEED', '42')))))
                 if path == '/api/pairs':
                     qs = parse_qs(urlparse(self.path).query)
-                    limit = min(200, int(qs.get('limit', ['50'])[0]))
+                    limit = min(200, int(qs.get('limit', ['100'])[0]))
                     offset = max(0, int(qs.get('offset', ['0'])[0]))
-                    q = qs.get('q', [''])[0].strip()
+                    status = qs.get('status', [''])[0].strip() or None
+                    relation = qs.get('relation', [''])[0].strip() or None
+                    q = qs.get('q', [''])[0].strip() or None
                     with Store() as store:
-                        if q:
-                            pairs = store.search_pairs(q, limit, offset)
-                            rows = store.pairs_merged(pairs=pairs)
-                            total = len(pairs)
-                        else:
-                            rows = store.pairs_merged(limit=limit, offset=offset)
-                            total = store.pairs_count()
-                        return self.send(dict(total=total, rows=rows))
+                        pairs, total = store.filter_pairs(status=status, relation=relation, q=q,
+                                                          threshold=float(os.getenv('SCREEN_THRESHOLD', '0.5')),
+                                                          limit=limit, offset=offset)
+                        return self.send(dict(total=total, rows=store.pairs_merged(pairs=pairs)))
                 self.send({'error': 'Not found'}, 404)
             except (ValueError, FileNotFoundError):
                 self.send({'error': 'Run not found or invalid'}, 404)

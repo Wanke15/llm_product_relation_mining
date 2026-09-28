@@ -257,15 +257,40 @@ class Store:
     def pairs_count(self):
         return self.conn.execute('SELECT COUNT(*) FROM pairs').fetchone()[0]
 
-    def search_pairs(self, q, limit=50, offset=0):
-        like = f'%{q}%'
+    def filter_pairs(self, status=None, relation=None, q=None, threshold=0.5, limit=100, offset=0):
+        """按 阶段状态 / 关系类型 / 关键词 筛选无序对，返回 (pairs, total)。"""
+        joins = ('LEFT JOIN screen s ON s.pair_key = p.pair_key '
+                 'LEFT JOIN details d ON d.pair_key = p.pair_key')
+        conds, params = [], []
+        if status == 'ok':
+            conds.append("d.status = 'ok'")
+        elif status == 'passed':
+            conds.append("s.status = 'ok' AND s.probability_related >= ? AND d.pair_key IS NULL")
+            params.append(float(threshold))
+        elif status == 'screened':
+            conds.append("s.status = 'ok' AND s.probability_related < ? AND d.pair_key IS NULL")
+            params.append(float(threshold))
+        elif status == 'pending':
+            conds.append('s.pair_key IS NULL')
+        elif status == 'insufficient':
+            conds.append("s.status = 'insufficient_input'")
+        elif status == 'error':
+            conds.append("(s.status = 'error' OR d.status = 'error')")
+        if relation:
+            conds.append('d.label = ?')
+            params.append(relation)
+        if q:
+            joins += ' LEFT JOIN products pa ON pa.spu_id = p.a LEFT JOIN products pb ON pb.spu_id = p.b'
+            conds.append('(pa.name LIKE ? OR pb.name LIKE ? OR p.a = ? OR p.b = ?)')
+            like = f'%{q}%'
+            params += [like, like, q, q]
+        where = ('WHERE ' + ' AND '.join(conds)) if conds else ''
+        base = f'FROM pairs p {joins}'
+        total = self.conn.execute(f'SELECT COUNT(*) {base} {where}', params).fetchone()[0]
         rows = self.conn.execute(
-            'SELECT DISTINCT p.pair_key, p.a, p.b FROM pairs p '
-            'JOIN products a ON a.spu_id = p.a JOIN products b ON b.spu_id = p.b '
-            'WHERE a.name LIKE ? OR b.name LIKE ? OR p.a = ? OR p.b = ? '
-            'ORDER BY p.pair_key LIMIT ? OFFSET ?',
-            (like, like, q.strip(), q.strip(), limit, offset)).fetchall()
-        return [dict(r) for r in rows]
+            f'SELECT p.pair_key, p.a, p.b {base} {where} ORDER BY p.pair_key LIMIT ? OFFSET ?',
+            params + [int(limit), int(offset)]).fetchall()
+        return [dict(r) for r in rows], total
 
     def pairs_merged(self, pairs=None, limit=50, offset=0):
         pairs = pairs if pairs is not None else self.distinct_pairs(limit=limit, offset=offset)
@@ -286,6 +311,7 @@ class Store:
                             a_name=pa['name'] if pa else None, b_name=pb['name'] if pb else None,
                             a_branch=pa['branch'] if pa else None, b_branch=pb['branch'] if pb else None,
                             a_cat=pa['category_group'] if pa else None, b_cat=pb['category_group'] if pb else None,
+                            a_image=pa['image_url'] if pa else None, b_image=pb['image_url'] if pb else None,
                             channels=channels, screen=sc, detail=dt, review=self.review(p['pair_key'])))
         return out
 
