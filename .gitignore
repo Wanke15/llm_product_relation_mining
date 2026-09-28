@@ -23,3 +23,5 @@ __pycache__/
 
 # IDE
 .idea/
+# 插件/浏览器测试产物
+.playwright-mcp/
